@@ -27,7 +27,7 @@ def load_pipeline():
 
 pipe, load_err = load_pipeline()
 
-st.title("Fake News Detection")
+st.title("Fake News Detection 🚨")
 st.write("Paste a news article or headline below and click Predict:")
 
 if load_err:
@@ -59,9 +59,9 @@ if st.button("Predict"):
 
         # Display result
         if pred == 1:
-            st.success("Prediction: Real News")
+            st.success("Prediction: Real News ✅")
         else:
-            st.error("Prediction: Fake News")
+            st.error("Prediction: Fake News ❌")
 
         with st.expander("Details"):
             details = {"predicted_label": int(pred)}
