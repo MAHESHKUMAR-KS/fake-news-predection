@@ -1,10 +1,14 @@
+# app.py
 import streamlit as st
+import pandas as pd
 import joblib
-from pathlib import Path
 import re
 import unicodedata
+import numpy as np
 
-# Define normalize_text at module scope so joblib can resolve it when unpickling
+# ----------------------------
+# Define normalize_text (needed for pipeline)
+# ----------------------------
 def normalize_text(s: str) -> str:
     if not isinstance(s, str):
         s = str(s)
@@ -16,55 +20,72 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-# Safe load utilities
-@st.cache_resource(show_spinner=False)
-def load_pipeline():
-    try:
-        pipe = joblib.load("model_pipeline.pkl")
-        return pipe, None
-    except Exception as e:
-        return None, str(e)
+# ----------------------------
+# Load Kaggle-trained pipeline
+# ----------------------------
+MODEL_PATH = "model_pipeline.pkl"  # Place the .pkl in the same folder
+pipe = joblib.load(MODEL_PATH)
 
-pipe, load_err = load_pipeline()
+# ----------------------------
+# Streamlit UI
+# ----------------------------
+st.set_page_config(page_title="Fake News Detection", layout="wide")
+st.title("📰 Fake News Detection App")
+st.write("Predict whether news is Fake (0) or Real (1) using the trained model.")
 
-st.title("Fake News Detection 🚨")
-st.write("Paste a news article or headline below and click Predict:")
+# Input choice
+input_type = st.sidebar.radio("Select input type:", ("Single News Text", "Upload CSV"))
 
-if load_err:
-    st.error(
-        "Failed to load pipeline. Make sure 'model_pipeline.pkl' is present.\n\n" + str(load_err)
-    )
-    st.stop()
+# Threshold slider
+st.sidebar.subheader("Decision Threshold")
+threshold = st.sidebar.slider(
+    "Set probability threshold for classifying as Real news",
+    0.0, 1.0, 0.5, 0.01
+)
 
-text = st.text_area("News text", height=200)
-
-if st.button("Predict"):
-    if text.strip() == "":
-        st.warning("Please enter some text to predict!")
-    elif len(text.split()) < 5:
-        st.warning("⚠️ Text is too short. Please enter at least 5 words for reliable prediction.")
-    else:
-        # Final decision strictly from pipeline.predict()
-        pred = int(pipe.predict([text])[0])  # 1 -> Real, 0 -> Fake
-
-        # Probabilities (if available) for display only
-        p_real = None
-        p_fake = None
-        try:
-            proba = pipe.predict_proba([text])[0]
-            p_fake = float(proba[0])
-            p_real = float(proba[1])
-        except Exception:
-            pass
-
-        # Display result
-        if pred == 1:
-            st.success("Prediction: Real News ✅")
+# ----------------------------
+# Single text input
+# ----------------------------
+if input_type == "Single News Text":
+    news_text = st.text_area("Enter the news text here:")
+    if st.button("Predict"):
+        if news_text.strip() == "":
+            st.error("Please enter some text to predict.")
         else:
-            st.error("Prediction: Fake News ❌")
+            prob = pipe.predict_proba([news_text])[0, 1]
+            pred = 1 if prob >= threshold else 0
+            label = "Real 🟢" if pred == 1 else "Fake 🔴"
+            st.subheader(f"Prediction: {label}")
+            st.write(f"Probability of being Real news: {prob:.3f}")
 
-        with st.expander("Details"):
-            details = {"predicted_label": int(pred)}
-            if p_real is not None:
-                details.update({"p_real": round(p_real, 4), "p_fake": round(p_fake, 4)})
-            st.write(details)
+# ----------------------------
+# CSV input
+# ----------------------------
+else:
+    uploaded_file = st.file_uploader("Upload CSV file", type="csv")
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        st.write("Uploaded Data Preview:")
+        st.dataframe(df.head())
+
+        if "text" not in df.columns:
+            st.error("CSV must contain a 'text' column.")
+        else:
+            if st.button("Predict CSV"):
+                probabilities = pipe.predict_proba(df["text"])[:, 1]
+                predictions = [1 if p >= threshold else 0 for p in probabilities]
+                df["Prediction"] = ["Real 🟢" if p == 1 else "Fake 🔴" for p in predictions]
+                df["Probability_Real"] = probabilities
+
+                st.subheader("Prediction Results:")
+                st.dataframe(df)
+
+                st.write("Summary Counts:")
+                st.write(df["Prediction"].value_counts())
+
+# Footer
+st.markdown("---")
+st.markdown(
+    "⚡ This app uses a Kaggle-trained model. "
+    "Set the threshold to adjust sensitivity for Real vs Fake news."
+)

@@ -1,4 +1,4 @@
-# train.py
+# train_kaggle_compatible.py
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -9,109 +9,145 @@ from sklearn.feature_extraction.text import HashingVectorizer, TfidfTransformer
 from sklearn.linear_model import SGDClassifier
 import joblib
 import json
-from text_utils import normalize_text
+import re
+import unicodedata
+import os
 
-# 1️⃣ Set project directory (portable)
-BASE_DIR = Path(__file__).resolve().parent
-print("Using project directory:", BASE_DIR)
+# ----------------------------
+# Normalize text function
+# ----------------------------
+def normalize_text(s: str) -> str:
+    if not isinstance(s, str):
+        s = str(s)
+    s = unicodedata.normalize("NFKC", s).lower()
+    s = s.replace("“", '"').replace("”", '"').replace("’", "'").replace("–", "-")
+    s = re.sub(r"https?://\S+|www\.\S+", " ", s)
+    s = re.sub(r"\S+@\S+", " ", s)
+    s = re.sub(r"[^a-z0-9\s,\.!?\-\'\"]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
-# 2️⃣ Load datasets
-fake_csv_path = BASE_DIR / "Fake.csv"
-real_csv_path = BASE_DIR / "True.csv"
+# ----------------------------
+# Auto-detect Kaggle dataset folder
+# ----------------------------
+input_dir = "/kaggle/input/"
+dataset_folder = None
 
-fake_df = pd.read_csv(fake_csv_path)
-real_df = pd.read_csv(real_csv_path)
+for folder in os.listdir(input_dir):
+    if set(["Fake.csv", "True.csv"]).issubset(os.listdir(os.path.join(input_dir, folder))):
+        dataset_folder = os.path.join(input_dir, folder)
+        break
 
-# 3️⃣ Label datasets
-fake_df["label"] = 0   # Fake
-real_df["label"] = 1   # Real
+if dataset_folder is None:
+    raise FileNotFoundError("Could not find Fake.csv and True.csv in /kaggle/input/")
 
-# 4️⃣ Combine datasets
+FAKE_CSV = Path(dataset_folder) / "Fake.csv"
+REAL_CSV = Path(dataset_folder) / "True.csv"
+
+MODEL_PIPELINE_PATH = Path("/kaggle/working/model_pipeline.pkl")
+REPORTS_DIR = Path("/kaggle/working/reports")
+REPORTS_DIR.mkdir(exist_ok=True)
+
+print(f"Using dataset folder: {dataset_folder}")
+
+# ----------------------------
+# Load datasets
+# ----------------------------
+fake_df = pd.read_csv(FAKE_CSV)
+real_df = pd.read_csv(REAL_CSV)
+
+fake_df["label"] = 0
+real_df["label"] = 1
+
 df = pd.concat([fake_df, real_df], axis=0).reset_index(drop=True)
 
-# Optional: combine title + text
+# Combine title + text if available
 if "title" in df.columns:
     df["text"] = (df["title"].fillna("") + " " + df["text"].fillna("")).str.strip()
 
-# Drop empty/duplicate texts
 df = df.dropna(subset=["text"]).drop_duplicates(subset=["text"]).reset_index(drop=True)
 
-# 5️⃣ Features and labels
 X = df["text"].astype(str)
 y = df["label"].astype(int)
 
-# 6️⃣ Train-test split
+# ----------------------------
+# Train-test split
+# ----------------------------
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-# 7️⃣ Define feature pipelines
+# ----------------------------
+# Feature pipelines
+# ----------------------------
 word_hash = Pipeline([
     ("hash", HashingVectorizer(
-        n_features=2**20,
+        n_features=2**18,
         alternate_sign=False,
         analyzer="word",
-        ngram_range=(1, 2),
+        ngram_range=(1,2),
         stop_words="english",
         lowercase=True,
-        preprocessor=normalize_text,
+        preprocessor=normalize_text
     )),
     ("tfidf", TfidfTransformer(sublinear_tf=True, use_idf=True)),
 ])
 
 char_hash = Pipeline([
     ("hash", HashingVectorizer(
-        n_features=2**19,
+        n_features=2**17,
         alternate_sign=False,
         analyzer="char_wb",
-        ngram_range=(3, 5),
+        ngram_range=(3,4),
         lowercase=True,
-        preprocessor=normalize_text,
+        preprocessor=normalize_text
     )),
     ("tfidf", TfidfTransformer(sublinear_tf=True, use_idf=True)),
 ])
 
 features = FeatureUnion([
     ("word", word_hash),
-    ("char", char_hash),
-], transformer_weights={
-    "word": 0.85,
-    "char": 0.15
-})
+    ("char", char_hash)
+], transformer_weights={"word": 0.85, "char": 0.15})
 
-# 8️⃣ Classifier
+# ----------------------------
+# Classifier (compatible)
+# ----------------------------
 clf = SGDClassifier(
-    loss="log_loss",
+    loss="log",               # use 'log' for backward compatibility
     class_weight="balanced",
-    max_iter=120,
+    max_iter=50,
     tol=1e-4,
     alpha=5e-6,
     random_state=42,
     early_stopping=True,
     validation_fraction=0.1,
     n_iter_no_change=5,
-    learning_rate="optimal",
+    learning_rate="optimal"
 )
 
-# Full pipeline
 pipe = Pipeline([
     ("features", features),
-    ("clf", clf),
+    ("clf", clf)
 ])
 
+# ----------------------------
 # Train
+# ----------------------------
+print("Training model ...")
 pipe.fit(X_train, y_train)
+print("Training complete ✅")
 
-# 9️⃣ Evaluate
+# ----------------------------
+# Evaluate
+# ----------------------------
 y_pred = pipe.predict(X_test)
 acc = accuracy_score(y_test, y_pred)
-report_text = classification_report(y_test, y_pred)
 report_dict = classification_report(y_test, y_pred, output_dict=True)
 cm = confusion_matrix(y_test, y_pred).tolist()
 
-# ROC-based threshold
 try:
-    y_scores = pipe.predict_proba(X_test)[:, 1]
+    y_scores = pipe.predict_proba(X_test)[:,1]
     fpr, tpr, thresholds = roc_curve(y_test, y_scores)
     youden_j = tpr - fpr
     best_idx = youden_j.argmax()
@@ -120,22 +156,19 @@ except Exception:
     best_threshold = 0.5
 
 print(f"Accuracy: {acc:.4f}")
-print("Classification report:\n" + report_text)
-print(f"Suggested decision threshold (Real=1): {best_threshold:.3f}")
+print(f"Recommended threshold: {best_threshold:.3f}")
 
-# 🔥 Save only ONE artifact (pipeline with vectorizer + model)
-model_pipeline_path = BASE_DIR / "model_pipeline.pkl"
-joblib.dump(pipe, model_pipeline_path)
+# ----------------------------
+# Save pipeline & metrics
+# ----------------------------
+joblib.dump(pipe, MODEL_PIPELINE_PATH)
 
-# Save metrics
-reports_dir = BASE_DIR / "reports"
-reports_dir.mkdir(exist_ok=True)
-with open(reports_dir / "metrics.json", "w", encoding="utf-8") as f:
+with open(REPORTS_DIR / "metrics.json", "w", encoding="utf-8") as f:
     json.dump({
         "accuracy": acc,
-        "report": report_dict,
         "confusion_matrix": cm,
+        "report": report_dict,
         "recommended_threshold": best_threshold
     }, f, indent=2)
 
-print("✅ Training complete. Model pipeline saved as model_pipeline.pkl")
+print(f"Model pipeline saved at {MODEL_PIPELINE_PATH}")
