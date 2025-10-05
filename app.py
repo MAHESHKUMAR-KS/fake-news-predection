@@ -6,9 +6,7 @@ import re
 import unicodedata
 import numpy as np
 
-# ----------------------------
-# Define normalize_text (needed for pipeline)
-# ----------------------------
+
 def normalize_text(s: str) -> str:
     if not isinstance(s, str):
         s = str(s)
