@@ -13,9 +13,6 @@ import re
 import unicodedata
 import os
 
-# ----------------------------
-# Normalize text function
-# ----------------------------
 def normalize_text(s: str) -> str:
     if not isinstance(s, str):
         s = str(s)
@@ -27,9 +24,7 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-# ----------------------------
-# Auto-detect Kaggle dataset folder
-# ----------------------------
+
 input_dir = "/kaggle/input/"
 dataset_folder = None
 
